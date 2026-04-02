@@ -551,3 +551,6 @@ let data ppf dl =
 let phrase ppf = function
   | Cfunction f -> fundecl ppf f
   | Cdata dl -> data ppf dl
+  | Cdata_in_section { section; items } ->
+    let items ppf = List.iter (fun d -> fprintf ppf "@ %a" data_item d) items in
+    fprintf ppf "@[<hv 1>(data_in_section %s%t)@]" section items

@@ -2909,6 +2909,16 @@ let data l =
   D.align ~fill:Zero ~bytes:8;
   List.iter (Emitaux.emit_data_item emit_data_item_actions) l
 
+let data_in_section ~section l =
+  let names = [section] and flags = Some "aw" and args = ["@progbits"] in
+  D.switch_to_section_raw ~names ~flags ~args ~is_delayed:false;
+  D.align ~fill:Zero ~bytes:4;
+  let section : Asm_targets.Asm_section.t =
+    Custom { names; flags; args; is_delayed = false }
+  in
+  List.iter (Emitaux.emit_data_item ~section emit_data_item_actions) l;
+  D.data ()
+
 (* Beginning / end of an assembly file *)
 
 let reset_all () =

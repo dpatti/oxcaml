@@ -646,6 +646,16 @@ type data_item =
 type phrase =
   | Cfunction of fundecl
   | Cdata of data_item list
+  | Cdata_in_section of
+      { section : string;
+        items : data_item list
+      }
+      (** Like [Cdata], but the items are placed in the named writable data
+          section instead of [.data].  [section] must be a valid C
+          identifier, so that the linker provides [__start_<section>] and
+          [__stop_<section>] symbols delimiting the concatenation of all
+          such items across the whole link.  Items are only aligned to 4
+          bytes so that the section is a dense array of 4-byte values. *)
 
 val ccatch :
   Lambda.static_label
