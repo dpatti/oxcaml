@@ -905,18 +905,19 @@ let symbol_of_cmm_symbol (s : Cmm.symbol) : Asm_targets.Asm_symbol.t =
   in
   Asm_targets.Asm_symbol.create ~visibility s.sym_name
 
-let emit_data_item actions (d : Cmm.data_item) =
+let emit_data_item ?(section = Asm_targets.Asm_section.Data) actions
+    (d : Cmm.data_item) =
   let module D = Asm_targets.Asm_directives in
   let module L = Asm_targets.Asm_label in
   match d with
   | Cdefine_symbol s -> (
     let sym = symbol_of_cmm_symbol s in
     match s.sym_global with
-    | Local -> D.define_label (L.create_label_for_local_symbol Data sym)
+    | Local -> D.define_label (L.create_label_for_local_symbol section sym)
     | Global ->
       actions.global_maybe_protected sym;
       actions.symbol_defined s.sym_name;
-      D.define_joint_label_and_symbol ~section:Data sym)
+      D.define_joint_label_and_symbol ~section sym)
   | Cint8 n -> D.int8 (Numbers.Int8.of_int_exn n)
   | Cint16 n -> D.int16 (Numbers.Int16.of_int_exn n)
   | Cint32 n -> D.int32 (Numbers.Int64.to_int32_exn (Int64.of_nativeint n))

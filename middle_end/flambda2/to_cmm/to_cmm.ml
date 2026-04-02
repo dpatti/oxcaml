@@ -130,6 +130,11 @@ let unit0 ~offsets ~all_code ~reachable_names flambda_unit =
     then Afl_instrument.instrument_initialiser body (fun () -> dbg)
     else body
   in
+  let body =
+    if !Clflags.trace_pc_guard
+    then Trace_pc_guard_instrument.instrument_initialiser body (fun () -> dbg)
+    else body
+  in
   let entry_name = Cmm_helpers.entry_symbol_name () in
   let res, entry_sym = R.raw_symbol res ~global:Global entry_name in
   let entry =
@@ -149,4 +154,9 @@ let unit0 ~offsets ~all_code ~reachable_names flambda_unit =
 
 let unit ~offsets ~all_code ~reachable_names flambda_unit =
   Profile.record_call "flambda_to_cmm" (fun () ->
-      unit0 ~offsets ~all_code ~reachable_names flambda_unit)
+      let produce () =
+        unit0 ~offsets ~all_code ~reachable_names flambda_unit
+      in
+      if !Clflags.trace_pc_guard
+      then Trace_pc_guard_instrument.with_instrumentation_state produce
+      else produce ())

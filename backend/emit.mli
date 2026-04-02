@@ -19,6 +19,10 @@
 
 val fundecl: Linear.fundecl -> unit
 val data: Cmm.data_item list -> unit
+
+(** Emit the items into the named writable data section (see
+    [Cmm.Cdata_in_section]) rather than [.data]. *)
+val data_in_section: section:string -> Cmm.data_item list -> unit
 val begin_assembly: (module Compiler_owee.Unix_intf.S) -> unit
 val end_assembly: unit -> unit
 

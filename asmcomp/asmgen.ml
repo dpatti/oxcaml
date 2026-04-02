@@ -223,6 +223,17 @@ let emit_end_assembly ~sourcefile () =
 let emit_data dl =
   if !Clflags.llvm_backend then Llvmize.data dl else if_emit_do Emit.data dl
 
+(* Data placed in a named section is not recorded in saved IR ([-save-ir-*]),
+   whose data items carry no section: emitting them from saved IR would put
+   them in [.data], and code referring to the section bounds would then
+   silently observe an empty range.  Rather than that, such data is emitted
+   directly, and a pipeline restarted from saved IR fails to link because the
+   symbols defined here are missing. *)
+let emit_data_in_section ~section dl =
+  if !Clflags.llvm_backend
+  then Misc.fatal_error "Cdata_in_section not supported with llvm backend";
+  if_emit_do (Emit.data_in_section ~section) dl
+
 let emit_fundecl f =
   if !Clflags.llvm_backend
   then Misc.fatal_error "Linear IR not supported with llvm backend";
@@ -530,7 +541,7 @@ let compile_phrases ~ppf_dump ps =
       (fun s p ->
         match p with
         | Cfunction fd -> String.Set.add fd.fun_name.sym_name s
-        | Cdata _ -> s)
+        | Cdata _ | Cdata_in_section _ -> s)
       String.Set.empty ps
   in
   let rec compile ~funcnames ps =
@@ -553,6 +564,9 @@ let compile_phrases ~ppf_dump ps =
         compile ~funcnames:(String.Set.remove fd.fun_name.sym_name funcnames) ps
       | Cdata dl ->
         compile_data dl;
+        compile ~funcnames ps
+      | Cdata_in_section { section; items } ->
+        emit_data_in_section ~section items;
         compile ~funcnames ps)
   in
   compile ~funcnames ps

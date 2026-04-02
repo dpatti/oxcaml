@@ -661,6 +661,7 @@
   string_table
   symbol_entry
   symbol_table
+  trace_pc_guard_instrument
   x86_ast
   x86_ast_utils
   x86_binary_emitter

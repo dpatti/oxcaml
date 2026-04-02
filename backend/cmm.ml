@@ -757,6 +757,10 @@ type data_item =
 type phrase =
   | Cfunction of fundecl
   | Cdata of data_item list
+  | Cdata_in_section of
+      { section : string;
+        items : data_item list
+      }
 
 let ccatch (i, ids, e1, e2, dbg, is_cold) =
   Ccatch (Normal, [{ label = i; params = ids; body = e2; dbg; is_cold }], e1)
