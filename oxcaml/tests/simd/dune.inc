@@ -1409,6 +1409,38 @@
    (diff empty.expected aes_ops_u.out)))
 
 (executable
+ (name cvt_stack_operand)
+ (modules cvt_stack_operand)
+ (enabled_if
+      (and (= %{context_name} "main")
+           (= %{architecture} "amd64")
+           (<> %{system} macosx)))
+ (ocamlopt_flags
+  (:standard -extension simd_beta ))
+ (libraries simd_test_builtins stdlib_stable stdlib_upstream_compatible)
+ (foreign_archives stubs))
+
+(rule
+ (alias   runtest)
+ (enabled_if
+      (and (= %{context_name} "main")
+           (= %{architecture} "amd64")
+           (<> %{system} macosx)))
+ (action
+  (with-outputs-to
+   cvt_stack_operand.out
+   (run ./cvt_stack_operand.exe))))
+
+(rule
+ (alias runtest)
+ (enabled_if
+      (and (= %{context_name} "main")
+           (= %{architecture} "amd64")
+           (<> %{system} macosx)))
+ (action
+   (diff empty.expected cvt_stack_operand.out)))
+
+(executable
  (name arrays)
  (modules arrays)
  (enabled_if (= %{context_name} "main"))

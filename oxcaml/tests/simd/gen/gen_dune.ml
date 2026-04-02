@@ -196,6 +196,7 @@ let () =
       "fma_ops_u", enabled_if_main_amd64_not_macos;
       "aes_ops", enabled_if_main_amd64_not_macos;
       "aes_ops_u", enabled_if_main_amd64_not_macos;
+      "cvt_stack_operand", enabled_if_main_amd64_not_macos;
       "arrays", enabled_if_main;
       "arrays_u", enabled_if_main;
       "scalar_ops", enabled_if_main;
