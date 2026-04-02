@@ -115,6 +115,27 @@ let evex_broadcast evex_w (len : Amd64_simd_defs.evex_length) =
   let bits = match len with L128 -> 128 | L256 -> 256 | L512 -> 512 in
   Printf.sprintf "{1to%d}" (bits / if evex_w then 64 else 32)
 
+(* For the narrowing conversions whose destination is an XMM register whether
+   the source is 128 or 256 bits wide, AT&T syntax cannot tell the two forms
+   apart when the source is a memory operand, so the assembler requires an
+   explicit x/y suffix. Both suffixes are also accepted with register operands,
+   so we always emit them for these instructions. *)
+let mnemonic (instr : Amd64_simd_instrs.instr) =
+  match[@warning "-4"] instr.id with
+  | Vcvtpd2dq_X_Xm128 | Vcvtpd2dq_X_Xm128_K | Vcvttpd2dq_X_Xm128
+  | Vcvttpd2dq_X_Xm128_K | Vcvtpd2ps_X_Xm128 | Vcvtpd2ps_X_Xm128_K
+  | Vcvtpd2udq_X_Xm128 | Vcvtpd2udq_X_Xm128_K | Vcvttpd2udq_X_Xm128
+  | Vcvttpd2udq_X_Xm128_K | Vcvtqq2ps_X_Xm128 | Vcvtqq2ps_X_Xm128_K
+  | Vcvtuqq2ps_X_Xm128 | Vcvtuqq2ps_X_Xm128_K ->
+    instr.mnemonic ^ "x"
+  | Vcvtpd2dq_X_Ym256 | Vcvtpd2dq_X_Ym256_K | Vcvttpd2dq_X_Ym256
+  | Vcvttpd2dq_X_Ym256_K | Vcvtpd2ps_X_Ym256 | Vcvtpd2ps_X_Ym256_K
+  | Vcvtpd2udq_X_Ym256 | Vcvtpd2udq_X_Ym256_K | Vcvttpd2udq_X_Ym256
+  | Vcvttpd2udq_X_Ym256_K | Vcvtqq2ps_X_Ym256 | Vcvtqq2ps_X_Ym256_K
+  | Vcvtuqq2ps_X_Ym256 | Vcvtuqq2ps_X_Ym256_K ->
+    instr.mnemonic ^ "y"
+  | _ -> instr.mnemonic
+
 let ievex b (instr : Amd64_simd_instrs.instr) args =
   let has_mem = Array.exists X86_ast_utils.is_mem args in
   let zeroing, rounding, broadcast =
@@ -147,7 +168,7 @@ let ievex b (instr : Amd64_simd_instrs.instr) args =
     then Some args.(0), Array.sub args 1 (Array.length args - 1)
     else None, args
   in
-  bprintf b "\t%s\t" instr.mnemonic;
+  bprintf b "\t%s\t" (mnemonic instr);
   (* The assembler requires the rounding mode to follow the immediate. *)
   (match imm with
   | Some imm -> bprintf b "%a, " arg imm
@@ -275,9 +296,9 @@ let print_instr b = function
     | Vcvtsi2ss_X_X_r64m64, [| arg1; arg2; arg3 |] ->
       i3 b "vcvtsi2ssq" arg1 arg2 arg3
     (* All other simd instructions. *)
-    | _, [| arg1; arg2 |] -> i2 b instr.mnemonic arg1 arg2
-    | _, [| arg1; arg2; arg3 |] -> i3 b instr.mnemonic arg1 arg2 arg3
-    | _, [| arg1; arg2; arg3; arg4 |] -> i4 b instr.mnemonic arg1 arg2 arg3 arg4
+    | _, [| arg1; arg2 |] -> i2 b (mnemonic instr) arg1 arg2
+    | _, [| arg1; arg2; arg3 |] -> i3 b (mnemonic instr) arg1 arg2 arg3
+    | _, [| arg1; arg2; arg3; arg4 |] -> i4 b (mnemonic instr) arg1 arg2 arg3 arg4
     | _, _ ->
       Misc.fatal_errorf "unexpected instruction layout for %s (%d args)"
         instr.mnemonic (Array.length args))

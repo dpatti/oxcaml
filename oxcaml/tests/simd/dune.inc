@@ -1332,6 +1332,38 @@
    (diff empty.expected fma_ops_u.out)))
 
 (executable
+ (name cvt_stack_operand)
+ (modules cvt_stack_operand)
+ (enabled_if
+      (and (= %{context_name} "main")
+           (= %{architecture} "amd64")
+           (<> %{system} macosx)))
+ (ocamlopt_flags
+  (:standard -extension simd_beta ))
+ (libraries simd_test_builtins stdlib_stable stdlib_upstream_compatible)
+ (foreign_archives stubs))
+
+(rule
+ (alias   runtest)
+ (enabled_if
+      (and (= %{context_name} "main")
+           (= %{architecture} "amd64")
+           (<> %{system} macosx)))
+ (action
+  (with-outputs-to
+   cvt_stack_operand.out
+   (run ./cvt_stack_operand.exe))))
+
+(rule
+ (alias runtest)
+ (enabled_if
+      (and (= %{context_name} "main")
+           (= %{architecture} "amd64")
+           (<> %{system} macosx)))
+ (action
+   (diff empty.expected cvt_stack_operand.out)))
+
+(executable
  (name arrays)
  (modules arrays)
  (enabled_if (= %{context_name} "main"))
@@ -3433,6 +3465,47 @@
            (<> %{system} macosx)))
  (action
    (diff empty.expected fma_ops_u_nodynlink.out)))
+
+(rule
+ (alias runtest)
+ (enabled_if
+      (and (= %{context_name} "main")
+           (= %{architecture} "amd64")
+           (<> %{system} macosx)))
+ (action
+  (copy cvt_stack_operand.ml cvt_stack_operand_nodynlink.ml)))
+
+(executable
+ (name cvt_stack_operand_nodynlink)
+ (modules cvt_stack_operand_nodynlink)
+ (enabled_if
+      (and (= %{context_name} "main")
+           (= %{architecture} "amd64")
+           (<> %{system} macosx)))
+ (ocamlopt_flags
+  (:standard -extension simd_beta -nodynlink))
+ (libraries simd_test_builtins stdlib_stable stdlib_upstream_compatible)
+ (foreign_archives stubs))
+
+(rule
+ (alias   runtest)
+ (enabled_if
+      (and (= %{context_name} "main")
+           (= %{architecture} "amd64")
+           (<> %{system} macosx)))
+ (action
+  (with-outputs-to
+   cvt_stack_operand_nodynlink.out
+   (run ./cvt_stack_operand_nodynlink.exe))))
+
+(rule
+ (alias runtest)
+ (enabled_if
+      (and (= %{context_name} "main")
+           (= %{architecture} "amd64")
+           (<> %{system} macosx)))
+ (action
+   (diff empty.expected cvt_stack_operand_nodynlink.out)))
 
 (rule
  (alias runtest)
@@ -5995,6 +6068,47 @@
            (<> %{system} macosx)))
  (action
    (diff empty.expected fma_ops_u_internal_assembler.out)))
+
+(rule
+ (alias runtest)
+ (enabled_if
+      (and (= %{context_name} "main")
+           (= %{architecture} "amd64")
+           (<> %{system} macosx)))
+ (action
+  (copy cvt_stack_operand.ml cvt_stack_operand_internal_assembler.ml)))
+
+(executable
+ (name cvt_stack_operand_internal_assembler)
+ (modules cvt_stack_operand_internal_assembler)
+ (enabled_if
+      (and (= %{context_name} "main")
+           (= %{architecture} "amd64")
+           (<> %{system} macosx)))
+ (ocamlopt_flags
+  (:standard -extension simd_beta -internal-assembler))
+ (libraries simd_test_builtins stdlib_stable stdlib_upstream_compatible)
+ (foreign_archives stubs))
+
+(rule
+ (alias   runtest)
+ (enabled_if
+      (and (= %{context_name} "main")
+           (= %{architecture} "amd64")
+           (<> %{system} macosx)))
+ (action
+  (with-outputs-to
+   cvt_stack_operand_internal_assembler.out
+   (run ./cvt_stack_operand_internal_assembler.exe))))
+
+(rule
+ (alias runtest)
+ (enabled_if
+      (and (= %{context_name} "main")
+           (= %{architecture} "amd64")
+           (<> %{system} macosx)))
+ (action
+   (diff empty.expected cvt_stack_operand_internal_assembler.out)))
 
 (rule
  (alias runtest)
