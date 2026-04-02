@@ -547,6 +547,11 @@ let params_and_body0 env res code_id ~result_arity ~fun_dbg
     then Afl_instrument.instrument_function fun_body fun_dbg
     else fun_body
   in
+  let fun_body =
+    if !Clflags.trace_pc_guard
+    then Trace_pc_guard_instrument.instrument_function fun_body fun_dbg
+    else fun_body
+  in
   let regalloc_attribute =
     Env.get_code_metadata env code_id |> Code_metadata.regalloc_attribute
   in
