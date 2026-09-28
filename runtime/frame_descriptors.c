@@ -249,22 +249,59 @@ static void free_descriptors(frame_descr_entry *descriptors,
   caml_mem_unmap(descriptors, descriptors_mapping_size(capacity));
 }
 
+/* Filling the table is bound by cache misses: descriptors are read
+   sequentially, but each one is inserted at a random slot of a table
+   that is far larger than the cache. So insertion is pipelined: a
+   descriptor's slot is prefetched as soon as the descriptor is
+   decoded, and the insertion itself happens FILL_PREFETCH_DISTANCE
+   descriptors later, by which time the slot's cache line has usually
+   arrived. */
+#define FILL_PREFETCH_DISTANCE 16
+
+typedef struct {
+  uintnat retaddr;
+  frame_descr *fd;
+  uintnat hash;
+} pending_entry;
+
+Caml_inline void insert_entry(frame_descr_entry *descriptors, uintnat mask,
+                              const pending_entry *e)
+{
+  uintnat h = e->hash;
+  while (descriptors[h].fd != NULL) {
+    h = (h+1) & mask;
+  }
+  descriptors[h].retaddr = e->retaddr;
+  descriptors[h].fd = e->fd;
+}
+
 static void fill_hashtable(
   caml_frame_descrs *table, caml_frametable_list *new_frametables)
 {
+  frame_descr_entry *descriptors = table->descriptors;
+  uintnat mask = table->mask;
+  pending_entry pending[FILL_PREFETCH_DISTANCE];
+  uintnat n = 0; /* descriptors decoded so far */
   iter_list(new_frametables,cur) {
     frametable_iter it;
     frametable_iter_start(&it, (intnat *) cur->frametable);
     while (it.remaining > 0) {
       uintnat retaddr;
       frame_descr *d = frametable_iter_next(&it, &retaddr);
-      uintnat h = Hash_retaddr(retaddr, table->mask);
-      while (table->descriptors[h].fd != NULL) {
-        h = (h+1) & table->mask;
-      }
-      table->descriptors[h].retaddr = retaddr;
-      table->descriptors[h].fd = d;
+      uintnat h = Hash_retaddr(retaddr, mask);
+      caml_prefetchw(&descriptors[h]);
+      pending_entry *slot = &pending[n % FILL_PREFETCH_DISTANCE];
+      if (n >= FILL_PREFETCH_DISTANCE) insert_entry(descriptors, mask, slot);
+      slot->retaddr = retaddr;
+      slot->fd = d;
+      slot->hash = h;
+      n++;
     }
+  }
+  /* Insert the descriptors still in flight. */
+  uintnat first = n > FILL_PREFETCH_DISTANCE ? n - FILL_PREFETCH_DISTANCE : 0;
+  for (uintnat i = first; i < n; i++) {
+    insert_entry(descriptors, mask, &pending[i % FILL_PREFETCH_DISTANCE]);
   }
 }
 
