@@ -1177,6 +1177,12 @@ let mk_trace_pc_guard f =
   \     __sanitizer_cov_trace_pc_guard callbacks must be\n\
   \     provided at link time)"
 
+let mk_trace_pc_guard_preserving f =
+  "-trace-pc-guard-preserving", Arg.Unit f,
+  "Like -trace-pc-guard, but each probe calls the callback\n\
+  \     out of line, preserving all registers (amd64 only,\n\
+  \     experimental)"
+
 let mk__ f =
   "-", Arg.String f,
   "<file>  Treat <file> as a file name (even if it starts with `-')"
@@ -1451,6 +1457,7 @@ module type Optcomp_options = sig
   val _afl_instrument : unit -> unit
   val _afl_inst_ratio : int -> unit
   val _trace_pc_guard : unit -> unit
+  val _trace_pc_guard_preserving : unit -> unit
   val _function_sections : unit -> unit
   val _save_ir_after : string -> unit
   val _save_ir_before : string -> unit
@@ -1812,6 +1819,7 @@ struct
     mk_afl_instrument F._afl_instrument;
     mk_afl_inst_ratio F._afl_inst_ratio;
     mk_trace_pc_guard F._trace_pc_guard;
+    mk_trace_pc_guard_preserving F._trace_pc_guard_preserving;
     mk_annot F._annot;
     mk_as_argument_for F._as_argument_for;
     mk_as_parameter F._as_parameter;
@@ -2795,6 +2803,9 @@ module Default = struct
     let _afl_inst_ratio n = afl_inst_ratio := n
     let _afl_instrument = set afl_instrument
     let _trace_pc_guard = set trace_pc_guard
+    let _trace_pc_guard_preserving () =
+      trace_pc_guard := true;
+      trace_pc_guard_preserving := true
     let _function_sections () =
       assert Config.function_sections;
       Compenv.first_ccopts := ("-ffunction-sections" ::(!Compenv.first_ccopts));

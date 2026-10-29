@@ -691,6 +691,19 @@ let emit_local_realloc lr =
   emit_call (global_gc_sym "caml_call_local_realloc" ~simd:lr.lr_save_simd);
   I.jmp (emit_asm_label_arg lr.lr_return_lbl)
 
+(* Record out-of-line calls to [__sanitizer_cov_trace_pc_guard], see
+   [Itrace_pc_guard] *)
+
+type trace_pc_guard_call =
+  { tpg_lbl : L.t;
+    tpg_return_lbl : L.t;
+    tpg_guard : int;
+    tpg_live : Reg.Set.t;
+    tpg_dbg : Debuginfo.t
+  }
+
+let trace_pc_guard_sites = ref ([] : trace_pc_guard_call list)
+
 (* Record calls to caml_ml_array_bound_error and caml_ml_array_align_error. In
    -g mode we maintain one call per bound check site. Without -g, we can share a
    single call. *)
@@ -2616,6 +2629,24 @@ let emit_instr ~first ~last ~fallthrough i =
     (* zero-extend eax *)
     I.or_ rdx (res i 0)
     (* combine high and low into rax *)
+  | Lop (Specific (Itrace_pc_guard guard)) ->
+    (* if (__sancov_should_track) goto slow path *)
+    let gate = Cmm.global_symbol "__sancov_should_track" in
+    add_used_symbol gate.sym_name;
+    load_symbol_addr gate r11;
+    I.cmp (int 0) (mem64 QWORD 0 (Scalar R11));
+    let lbl_call = L.create Text in
+    let lbl_return = L.create Text in
+    I.jne (emit_asm_label_arg lbl_call);
+    D.define_label lbl_return;
+    trace_pc_guard_sites
+      := { tpg_lbl = lbl_call;
+           tpg_return_lbl = lbl_return;
+           tpg_guard = guard;
+           tpg_live = i.live;
+           tpg_dbg = i.dbg
+         }
+         :: !trace_pc_guard_sites
   | Lop (Specific Ilfence) -> I.lfence ()
   | Lop (Specific Isfence) -> I.sfence ()
   | Lop (Specific Imfence) -> I.mfence ()
@@ -2833,6 +2864,59 @@ let emit_function_type_and_size fun_sym =
 
 (* Emission of a function declaration *)
 
+(* The slow path of an [Itrace_pc_guard] probe calls
+   [__sanitizer_cov_trace_pc_guard(&guard)] on the C stack (or, without stack
+   checks, an aligned stack below the current one), saving every live register
+   that the C calling convention does not preserve. Only [r11] is clobbered, as
+   declared by [Proc.destroyed_at_basic]. *)
+let emit_trace_pc_guard_call tpg =
+  D.define_label tpg.tpg_lbl;
+  emit_debug_info tpg.tpg_dbg;
+  let must_save (r : Reg.t) =
+    Reg.is_reg r
+    &&
+    match r.typ with
+    | Int | Val | Addr -> (
+      match reg64 r with
+      | RAX | RDI | RSI | RDX | RCX | R8 | R9 | R10 | R11 -> true
+      | RBX | RBP | RSP | R12 | R13 | R14 | R15 -> false)
+    | Float | Float32 | Vec128 | Valx2 | Vec256 | Vec512 | Mask -> true
+  in
+  let slot_size (r : Reg.t) =
+    match r.typ with
+    | Int | Val | Addr | Mask | Float | Float32 -> 8
+    | Vec128 | Valx2 -> 16
+    | Vec256 -> 32
+    | Vec512 -> 64
+  in
+  (* The first slot holds the original stack pointer. *)
+  let saved, size =
+    Reg.Set.fold
+      (fun r (saved, offset) ->
+        if must_save r
+        then (r, offset) :: saved, offset + slot_size r
+        else saved, offset)
+      tpg.tpg_live ([], 8)
+  in
+  let frame_size = (size + 15) land lnot 15 in
+  (* [Outgoing] slots are addressed relative to the stack pointer, independently
+     of the frame. *)
+  let slot (r : Reg.t) offset =
+    Reg.create_at_location r.typ (Stack (Outgoing offset))
+  in
+  I.mov rsp r11;
+  if Config.no_stack_checks
+  then I.and_ (int (-16)) rsp
+  else I.mov (domain_field Domainstate.Domain_c_stack) rsp;
+  I.sub (int frame_size) rsp;
+  I.mov r11 (mem64 QWORD 0 (Scalar RSP));
+  List.iter (fun (r, offset) -> move r (slot r offset)) saved;
+  load_symbol_addr (Cfg_trace_pc_guard.guard_symbol tpg.tpg_guard) rdi;
+  emit_call (Cmm.global_symbol "__sanitizer_cov_trace_pc_guard");
+  List.iter (fun (r, offset) -> move (slot r offset) r) saved;
+  I.mov (mem64 QWORD 0 (Scalar RSP)) rsp;
+  I.jmp (emit_asm_label_arg tpg.tpg_return_lbl)
+
 let fundecl fundecl =
   let fun_end_label, fundecl =
     match Emitaux.Dwarf_helpers.record_dwarf_for_fundecl fundecl with
@@ -2846,6 +2930,7 @@ let fundecl fundecl =
   stack_offset := 0;
   call_gc_sites := [];
   local_realloc_sites := [];
+  trace_pc_guard_sites := [];
   clear_safety_checks ();
   clear_stack_realloc ();
   Stack_class.Tbl.copy_values ~from:fundecl.fun_num_stack_slots
@@ -2887,6 +2972,7 @@ let fundecl fundecl =
   let fun_body_end = current_output_pos () in
   List.iter emit_call_gc !call_gc_sites;
   List.iter emit_local_realloc !local_realloc_sites;
+  List.iter emit_trace_pc_guard_call !trace_pc_guard_sites;
   let gc_jump_pads_end = current_output_pos () in
   emit_call_safety_errors ();
   emit_stack_realloc ();

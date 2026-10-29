@@ -49,7 +49,7 @@ let guard_symbol n : Cmm.symbol =
 let new_guard () =
   let n = !guard_count in
   incr guard_count;
-  guard_symbol n
+  n
 
 (* An edge is critical if its source has several successors and its destination
    several predecessors. A probe can only record such an edge if a block is
@@ -352,7 +352,9 @@ let instrument_block cfg_with_layout (block : Cfg.basic_block) ~prefix_length =
     { start = call_label;
       body =
         DLL.of_list
-          [ basic (Op (Const_symbol (new_guard ()))) ~arg:[||] ~res:[| guard |];
+          [ basic
+              (Op (Const_symbol (guard_symbol (new_guard ()))))
+              ~arg:[||] ~res:[| guard |];
             basic (Op Move) ~arg:[| guard |] ~res:loc_arg ];
       terminator =
         terminator
@@ -384,9 +386,36 @@ let instrument_block cfg_with_layout (block : Cfg.basic_block) ~prefix_length =
   | Some last ->
     Cfg_with_layout.add_block cfg_with_layout call_block ~after:last
 
+(* With [-trace-pc-guard-preserving], a probe is a single target-specific
+   operation at the start of the block, whose out-of-line slow path preserves
+   all registers but one scratch register (see [Arch.trace_pc_guard_operation]
+   and the emitter). The register allocator only has to avoid that scratch
+   register, and no block needs to be split. *)
+let instrument_block_preserving (cfg : Cfg.t) (block : Cfg.basic_block) =
+  let stack_offset, dbg =
+    match DLL.hd block.body with
+    | Some (instr : Cfg.basic Cfg.instruction) -> instr.stack_offset, instr.dbg
+    | None -> block.terminator.stack_offset, block.terminator.dbg
+  in
+  match Arch.trace_pc_guard_operation (new_guard ()) with
+  | None ->
+    Misc.fatal_error
+      "-trace-pc-guard-preserving is not supported on this target"
+  | Some op ->
+    DLL.add_begin block.body
+      (Cfg.make_instruction
+         ~desc:(Op (Specific op) : Cfg.basic)
+         ~arg:[||] ~res:[||] ~dbg ~stack_offset
+         ~id:(InstructionId.get_and_incr cfg.next_instruction_id)
+         ())
+
 let run cfg_with_infos =
   let cfg_with_layout = Cfg_with_infos.cfg_with_layout cfg_with_infos in
   let cfg = Cfg_with_layout.cfg cfg_with_layout in
+  let preserving = !Clflags.trace_pc_guard_preserving in
+  let insertion_point cfg_with_infos block =
+    if preserving then Some 0 else insertion_point cfg_with_infos block
+  in
   if split_critical_edges cfg_with_layout
   then (
     Cfg_with_infos.invalidate_liveness cfg_with_infos;
@@ -428,6 +457,12 @@ let run cfg_with_infos =
   in
   match to_instrument with
   | [] -> cfg_with_infos
+  | _ :: _ when preserving ->
+    List.iter
+      (fun (block, _) -> instrument_block_preserving cfg block)
+      to_instrument;
+    Cfg_with_infos.invalidate_liveness cfg_with_infos;
+    cfg_with_infos
   | _ :: _ ->
     List.iter
       (fun (block, prefix_length) ->

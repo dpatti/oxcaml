@@ -310,6 +310,8 @@ type specific_operation =
   | Ilfence                            (* load fence *)
   | Isfence                            (* store fence *)
   | Imfence                            (* memory fence *)
+  | Itrace_pc_guard of int             (* coverage probe, see
+                                          [Cfg_trace_pc_guard] *)
   | Ipackf32                           (* UNPCKLPS on registers; see Cpackf32 *)
   | Isimd of Simd.operation            (* SIMD instruction set operations *)
   | Isimd_mem of Simd.Mem.operation * addressing_mode
@@ -426,6 +428,7 @@ let fold_delta_into_specific_operation op ~arg_is_folded_reg ~delta =
     end
   | Istore_int _ | Ioffset_loc _ | Ifloatarithmem _ | Ibswap _ | Isextend32
   | Izextend32 | Ineg | Irdtsc | Irdpmc | Ilfence | Isfence | Imfence
+  | Itrace_pc_guard _
   | Ipackf32 | Isimd _ | Isimd_mem _ | Icldemote _ | Iprefetch _
   | Illvm_intrinsic _ ->
     None
@@ -519,6 +522,8 @@ let print_specific_operation printreg op ppf arg =
       fprintf ppf "sfence"
   | Imfence ->
       fprintf ppf "mfence"
+  | Itrace_pc_guard n ->
+      fprintf ppf "trace_pc_guard %d" n
   | Irdpmc ->
       fprintf ppf "rdpmc %a" printreg arg.(0)
   | Ipackf32 ->
@@ -553,6 +558,7 @@ let specific_operation_name : specific_operation -> string = fun op ->
   | Ilfence -> "lfence"
   | Isfence -> "sfence"
   | Imfence -> "mfence"
+  | Itrace_pc_guard _ -> "trace_pc_guard"
   | Irdpmc -> "rdpmc"
   | Ipackf32 -> "packf32"
   | Isimd _simd -> "simd"
@@ -574,7 +580,7 @@ let operation_is_pure = function
   | Ilea _ | Ibswap _ | Isextend32 | Izextend32 | Ineg
   | Ifloatarithmem _  -> true
   | Irdtsc | Irdpmc
-  | Ilfence | Isfence | Imfence
+  | Ilfence | Isfence | Imfence | Itrace_pc_guard _
   | Istore_int (_, _, _) | Ioffset_loc (_, _)
   | Icldemote _ | Iprefetch _ -> false
   | Ipackf32 -> true
@@ -591,7 +597,7 @@ let operation_allocates = function
   | Ifloatarithmem _
   | Irdtsc | Irdpmc  | Ipackf32
   | Isimd _ | Isimd_mem _
-  | Ilfence | Isfence | Imfence
+  | Ilfence | Isfence | Imfence | Itrace_pc_guard _
   | Istore_int (_, _, _) | Ioffset_loc (_, _)
   | Icldemote _ | Iprefetch _ -> false
   | Illvm_intrinsic _intr ->
@@ -678,6 +684,8 @@ let equal_specific_operation left right =
     true
   | Imfence, Imfence ->
     true
+  | Itrace_pc_guard l, Itrace_pc_guard r ->
+    Int.equal l r
   | Ipackf32, Ipackf32 ->
     true
   | Icldemote x, Icldemote x' -> equal_addressing_mode x x'
@@ -693,7 +701,7 @@ let equal_specific_operation left right =
   | Illvm_intrinsic l, Illvm_intrinsic r -> String.equal l r
   | (Ilea _ | Istore_int _ | Ioffset_loc _ | Ifloatarithmem _ | Ibswap _ |
      Isextend32 | Izextend32 | Ineg |
-     Irdtsc | Irdpmc | Ilfence | Isfence | Imfence |
+     Irdtsc | Irdpmc | Ilfence | Isfence | Imfence | Itrace_pc_guard _ |
      Ipackf32 | Isimd _ | Isimd_mem _ | Icldemote _ | Iprefetch _ |
      Illvm_intrinsic _), _ ->
     false
@@ -793,6 +801,8 @@ let isomorphic_specific_operation op1 op2 =
     true
   | Imfence, Imfence ->
     true
+  | Itrace_pc_guard l, Itrace_pc_guard r ->
+    Int.equal l r
   | Ipackf32, Ipackf32 ->
     true
   | Icldemote x, Icldemote x' -> equal_addressing_mode_without_displ x x'
@@ -808,7 +818,9 @@ let isomorphic_specific_operation op1 op2 =
   | Illvm_intrinsic l, Illvm_intrinsic r -> String.equal l r
   | (Ilea _ | Istore_int _ | Ioffset_loc _ | Ifloatarithmem _ | Ibswap _ |
      Isextend32 | Izextend32 | Ineg |
-     Irdtsc | Irdpmc | Ilfence | Isfence | Imfence |
+     Irdtsc | Irdpmc | Ilfence | Isfence | Imfence | Itrace_pc_guard _ |
      Ipackf32 | Isimd _ | Isimd_mem _ | Icldemote _ | Iprefetch _ |
      Illvm_intrinsic _), _ ->
     false
+
+let trace_pc_guard_operation n = Some (Itrace_pc_guard n)

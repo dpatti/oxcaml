@@ -42,6 +42,9 @@
 (** Instrument a function. Must run before register allocation. *)
 val run : Cfg_with_infos.t -> Cfg_with_infos.t
 
+(** The local symbol of the guard with the given index. *)
+val guard_symbol : int -> Cmm.symbol
+
 (** Emit the guard array of the current unit, if any guards were allocated. To
     be called once at the end of the assembly file. *)
 val emit_guards : unit -> unit

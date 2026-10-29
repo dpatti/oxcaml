@@ -101,6 +101,8 @@ type specific_operation =
   | Ilfence                            (* load fence *)
   | Isfence                            (* store fence *)
   | Imfence                            (* memory fence *)
+  | Itrace_pc_guard of int             (* coverage probe, see
+                                          [Cfg_trace_pc_guard] *)
   | Ipackf32                           (* UNPCKLPS on registers; see Cpackf32 *)
   | Isimd of Simd.operation            (* SIMD instruction set operations *)
   | Isimd_mem of Simd.Mem.operation * addressing_mode
@@ -189,6 +191,10 @@ val float_cond_and_need_swap
   :  Scalar.Float_comparison.t -> X86_ast.float_condition * bool
 
 val isomorphic_specific_operation : specific_operation -> specific_operation -> bool
+
+(** The operation implementing the coverage probe with the given guard index
+    for [-trace-pc-guard-preserving], if supported by the target. *)
+val trace_pc_guard_operation : int -> specific_operation option
 (* addressing mode functions *)
 
 val equal_addressing_mode_without_displ : addressing_mode -> addressing_mode -> bool
