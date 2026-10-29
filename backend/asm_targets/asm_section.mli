@@ -58,6 +58,8 @@ type t =
   | Note_ocaml_eh
   | Note_gnu_stack
   | Debuginfo_strings  (** Mergeable string section for debuginfo strings *)
+  | Trace_pc_guards
+      (** Coverage guards for [-trace-pc-guard], see [Cfg_trace_pc_guard] *)
   | Custom of
       { names : string list;
         flags : string option;

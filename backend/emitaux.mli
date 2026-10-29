@@ -185,10 +185,4 @@ type emit_data_item_actions =
     symbol_used : string -> unit
   }
 
-(** [section] is the section the item is being emitted into, which must be
-    the current section; it defaults to [Data]. *)
-val emit_data_item :
-  ?section:Asm_targets.Asm_section.t ->
-  emit_data_item_actions ->
-  Cmm.data_item ->
-  unit
+val emit_data_item : emit_data_item_actions -> Cmm.data_item -> unit

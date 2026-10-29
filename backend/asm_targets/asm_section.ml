@@ -57,6 +57,7 @@ type t =
   | Note_ocaml_eh
   | Note_gnu_stack
   | Debuginfo_strings
+  | Trace_pc_guards
   | Custom of
       { names : string list;
         flags : string option;
@@ -89,7 +90,7 @@ let is_delayed = function
   | Data | Read_only_data | Eight_byte_literals | Sixteen_byte_literals
   | Thirtytwo_byte_literals | Sixtyfour_byte_literals | Jump_tables | Text
   | Function_text _ | Stapsdt_base | Stapsdt_note | Probes | Note_ocaml_eh
-  | Note_gnu_stack | Debuginfo_strings ->
+  | Note_gnu_stack | Debuginfo_strings | Trace_pc_guards ->
     false
   | Custom { is_delayed; _ } -> is_delayed
 
@@ -121,6 +122,7 @@ let print ppf t =
     | Note_ocaml_eh -> "Note_ocaml_eh"
     | Note_gnu_stack -> "Note_gnu_stack"
     | Debuginfo_strings -> "Debuginfo_strings"
+    | Trace_pc_guards -> "Trace_pc_guards"
     | Custom { names; _ } ->
       Printf.sprintf "(Custom %s)" (String.concat " " names)
   in
@@ -145,7 +147,7 @@ let section_is_text = function
   | Data | Read_only_data | Eight_byte_literals | Sixteen_byte_literals
   | Thirtytwo_byte_literals | Sixtyfour_byte_literals | Jump_tables | DWARF _
   | Stapsdt_base | Stapsdt_note | Probes | Note_ocaml_eh | Note_gnu_stack
-  | Debuginfo_strings ->
+  | Debuginfo_strings | Trace_pc_guards ->
     false
   | Custom { flags; _ } -> (
     (* Check if the section is executable based on flags *)
@@ -277,6 +279,19 @@ let details t first_occurrence =
       in
       [".rodata.str1.1"], Some "aMS", [progbits; "1"]
     (* 1 = characters *)
+    | Trace_pc_guards, _, MacOS_like ->
+      Misc.fatal_error "-trace-pc-guard is not supported on this target system"
+    | Trace_pc_guards, arch, _ ->
+      (* Writable data. The section name is a valid C identifier, so that the
+         linker defines [__start_ocaml_trace_pc_guards] and
+         [__stop_ocaml_trace_pc_guards] around the concatenation of the guard
+         arrays of all compilation units. *)
+      let progbits =
+        match arch with
+        | ARM | AArch64 -> "%progbits"
+        | IA32 | X86_64 | POWER | Z | Riscv -> "@progbits"
+      in
+      ["ocaml_trace_pc_guards"], Some "aw", [progbits]
     | Custom { names; flags; args; _ }, _, _ -> names, flags, args
   in
   let is_delayed = is_delayed t in

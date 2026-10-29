@@ -99,6 +99,7 @@ let (pass_to_cfg : Cfg_format.cfg_unit_info Compiler_pass_map.t) =
 
 let reset () =
   Zero_alloc_checker.reset_unit_info ();
+  Cfg_trace_pc_guard.reset ();
   start_from_emit := false;
   Compiler_pass_map.iter
     (fun pass (cfg_unit_info : Cfg_format.cfg_unit_info) ->
@@ -214,7 +215,9 @@ let emit_end_assembly ~sourcefile () =
   else
     if_emit_do
       (fun () ->
-        try Emit.end_assembly ()
+        try
+          if !Clflags.trace_pc_guard then Cfg_trace_pc_guard.emit_guards ();
+          Emit.end_assembly ()
         with Emitaux.Error e ->
           let sourcefile = Option.value ~default:"*none*" sourcefile in
           raise (Error (Asm_generation (sourcefile, e))))
@@ -222,17 +225,6 @@ let emit_end_assembly ~sourcefile () =
 
 let emit_data dl =
   if !Clflags.llvm_backend then Llvmize.data dl else if_emit_do Emit.data dl
-
-(* Data placed in a named section is not recorded in saved IR ([-save-ir-*]),
-   whose data items carry no section: emitting them from saved IR would put
-   them in [.data], and code referring to the section bounds would then
-   silently observe an empty range.  Rather than that, such data is emitted
-   directly, and a pipeline restarted from saved IR fails to link because the
-   symbols defined here are missing. *)
-let emit_data_in_section ~section dl =
-  if !Clflags.llvm_backend
-  then Misc.fatal_error "Cdata_in_section not supported with llvm backend";
-  if_emit_do (Emit.data_in_section ~section) dl
 
 let emit_fundecl f =
   if !Clflags.llvm_backend
@@ -462,6 +454,19 @@ let compile_cfg ppf_dump ~funcnames fd_cmm cfg_with_layout =
   ++ Compiler_hooks.execute_and_pipe Compiler_hooks.Cfg_cse
   ++ Cfg_with_infos.make
   ++ cfg_with_infos_profile ~accumulate:true "cfg_deadcode" Cfg_deadcode.run
+  ++ (fun cfg_with_infos ->
+  match !Clflags.trace_pc_guard with
+  | false -> cfg_with_infos
+  | true ->
+    cfg_with_infos
+    ++ cfg_with_infos_profile ~accumulate:true "cfg_trace_pc_guard"
+         Cfg_trace_pc_guard.run
+    ++ fun cfg_with_infos ->
+    let (_ : Cfg_with_layout.t) =
+      pass_dump_cfg_if ppf_dump Oxcaml_flags.dump_cfg "After cfg_trace_pc_guard"
+        (Cfg_with_infos.cfg_with_layout cfg_with_infos)
+    in
+    cfg_with_infos)
   ++ save_cfg_before_regalloc
   (* CR-soon xclerc for xclerc: copy propagation should be "moved inside"
      register allocation, so that it would be covered by the validator; it
@@ -643,7 +648,7 @@ let compile_phrases ~ppf_dump ps =
       (fun s p ->
         match p with
         | Cfunction fd -> String.Set.add fd.fun_name.sym_name s
-        | Cdata _ | Cdata_in_section _ -> s)
+        | Cdata _ -> s)
       String.Set.empty ps
   in
   let rec compile ~funcnames ps =
@@ -666,9 +671,6 @@ let compile_phrases ~ppf_dump ps =
         compile ~funcnames:(String.Set.remove fd.fun_name.sym_name funcnames) ps
       | Cdata dl ->
         compile_data dl;
-        compile ~funcnames ps
-      | Cdata_in_section { section; items } ->
-        emit_data_in_section ~section items;
         compile ~funcnames ps)
   in
   compile ~funcnames ps
@@ -699,6 +701,8 @@ let compile_unit unix ~output_prefix ~asm_filename ~keep_asm ~obj_filename
        (empty) temporary file should be deleted. *)
     if (not create_asm) || not keep_asm then remove_file asm_filename
   in
+  if !Clflags.llvm_backend && !Clflags.trace_pc_guard
+  then Misc.fatal_error "-trace-pc-guard is not supported with -llvm-backend";
   if !Clflags.llvm_backend then Llvmize.init ~output_prefix ~ppf_dump;
   let open_asm_file () =
     if create_asm
