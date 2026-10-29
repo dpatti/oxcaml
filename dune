@@ -650,7 +650,6 @@
   string_table
   symbol_entry
   symbol_table
-  trace_pc_guard_instrument
   x86_ast
   x86_ast_utils
   x86_binary_emitter
@@ -694,6 +693,7 @@
   cfg_stack_checks
   cfg_polling
   cfg_simplify
+  cfg_trace_pc_guard
   cfg_z3
   cfg_prologue
   cfg_merge_blocks
