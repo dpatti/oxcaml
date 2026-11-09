@@ -42,6 +42,9 @@
 (** Instrument a function. Must run before register allocation. *)
 val run : Cfg_with_infos.t -> Cfg_with_infos.t
 
+(** The name of the callback, [__sanitizer_cov_trace_pc_guard]. *)
+val callback : string
+
 (** The local symbol of the guard with the given index. *)
 val guard_symbol : int -> Cmm.symbol
 

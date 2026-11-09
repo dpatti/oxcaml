@@ -265,6 +265,41 @@ let insertion_point cfg_with_infos (block : Cfg.basic_block) =
   in
   find 0 (DLL.to_list block.body)
 
+(* The debuginfo of the probe of [block]. The callback records its return
+   address, which coverage tools map to a source line, so this determines the
+   line that the probe covers. The first instructions of a block (moves,
+   constants, jumps) usually have no location, so this is the first location in
+   the block; failing that, the function's location for the entry probe, or the
+   location of the branch leading to the block if all predecessors that have one
+   agree. Otherwise the probe has no source line. *)
+let probe_dbg (cfg : Cfg.t) (block : Cfg.basic_block) ~is_entry =
+  let has_line (dbg : Debuginfo.t) = Emitaux.has_source_line dbg in
+  let in_block =
+    match
+      DLL.find_opt block.body ~f:(fun (instr : Cfg.basic Cfg.instruction) ->
+          has_line instr.dbg)
+    with
+    | Some instr -> Some instr.dbg
+    | None ->
+      if has_line block.terminator.dbg then Some block.terminator.dbg else None
+  in
+  match in_block with
+  | Some dbg -> dbg
+  | None when is_entry && has_line cfg.fun_dbg -> cfg.fun_dbg
+  | None -> (
+    let branch_dbgs =
+      Label.Set.fold
+        (fun predecessor acc ->
+          let dbg = (Cfg.get_block_exn cfg predecessor).terminator.dbg in
+          if
+            has_line dbg
+            && not (List.exists (fun d -> Debuginfo.compare d dbg = 0) acc)
+          then dbg :: acc
+          else acc)
+        block.predecessors []
+    in
+    match branch_dbgs with [dbg] -> dbg | [] | _ :: _ :: _ -> Debuginfo.none)
+
 let split_list l n =
   let rec loop n rev_prefix l =
     match l with
@@ -282,13 +317,14 @@ let split_list l n =
    [block] keeps its label, so that branches to it, including self tail calls,
    are unaffected. [rest_block] directly follows [block] in the layout so that
    the common case falls through, and [call_block] is placed at the end. *)
-let instrument_block cfg_with_layout (block : Cfg.basic_block) ~prefix_length =
+let instrument_block cfg_with_layout (block : Cfg.basic_block) ~prefix_length
+    ~dbg =
   let cfg = Cfg_with_layout.cfg cfg_with_layout in
   let prefix, suffix = split_list (DLL.to_list block.body) prefix_length in
-  let stack_offset, dbg =
+  let stack_offset =
     match suffix with
-    | (instr : Cfg.basic Cfg.instruction) :: _ -> instr.stack_offset, instr.dbg
-    | [] -> block.terminator.stack_offset, block.terminator.dbg
+    | (instr : Cfg.basic Cfg.instruction) :: _ -> instr.stack_offset
+    | [] -> block.terminator.stack_offset
   in
   let make desc ~arg ~res =
     Cfg.make_instruction ~desc ~arg ~res ~dbg ~stack_offset
@@ -391,11 +427,11 @@ let instrument_block cfg_with_layout (block : Cfg.basic_block) ~prefix_length =
    all registers but one scratch register (see [Arch.trace_pc_guard_operation]
    and the emitter). The register allocator only has to avoid that scratch
    register, and no block needs to be split. *)
-let instrument_block_preserving (cfg : Cfg.t) (block : Cfg.basic_block) =
-  let stack_offset, dbg =
+let instrument_block_preserving (cfg : Cfg.t) (block : Cfg.basic_block) ~dbg =
+  let stack_offset =
     match DLL.hd block.body with
-    | Some (instr : Cfg.basic Cfg.instruction) -> instr.stack_offset, instr.dbg
-    | None -> block.terminator.stack_offset, block.terminator.dbg
+    | Some (instr : Cfg.basic Cfg.instruction) -> instr.stack_offset
+    | None -> block.terminator.stack_offset
   in
   match Arch.trace_pc_guard_operation (new_guard ()) with
   | None ->
@@ -420,9 +456,10 @@ let run cfg_with_infos =
   then (
     Cfg_with_infos.invalidate_liveness cfg_with_infos;
     Cfg_with_infos.invalidate_dominators_and_loop_infos cfg_with_infos);
-  (* All insertion points are computed before the graph is modified, since they
-     depend on liveness. Blocks are visited in layout order so that guards are
-     numbered deterministically. *)
+  (* All insertion points and probe debuginfo are computed before the graph is
+     modified, since they depend on liveness and on the original terminators.
+     Blocks are visited in layout order so that guards are numbered
+     deterministically. *)
   let dominators = Cfg_with_infos.dominators cfg_with_infos in
   let post_dominators = Post_dominators.build cfg in
   (* The entry block usually cannot be instrumented, since the parameters are
@@ -443,30 +480,30 @@ let run cfg_with_infos =
     DLL.fold_right (Cfg_with_layout.layout cfg_with_layout) ~init:[]
       ~f:(fun label acc ->
         let block = Cfg.get_block_exn cfg label in
+        let is_entry = Label.equal label entry_label in
         if
           is_unreachable block
           || not
-               (should_instrument ~dominators ~post_dominators
-                  ~is_entry:(Label.equal label entry_label)
-                  block)
+               (should_instrument ~dominators ~post_dominators ~is_entry block)
         then acc
         else
           match insertion_point cfg_with_infos block with
           | None -> acc
-          | Some prefix_length -> (block, prefix_length) :: acc)
+          | Some prefix_length ->
+            (block, prefix_length, probe_dbg cfg block ~is_entry) :: acc)
   in
   match to_instrument with
   | [] -> cfg_with_infos
   | _ :: _ when preserving ->
     List.iter
-      (fun (block, _) -> instrument_block_preserving cfg block)
+      (fun (block, _, dbg) -> instrument_block_preserving cfg block ~dbg)
       to_instrument;
     Cfg_with_infos.invalidate_liveness cfg_with_infos;
     cfg_with_infos
   | _ :: _ ->
     List.iter
-      (fun (block, prefix_length) ->
-        instrument_block cfg_with_layout block ~prefix_length)
+      (fun (block, prefix_length, dbg) ->
+        instrument_block cfg_with_layout block ~prefix_length ~dbg)
       to_instrument;
     let cfg = { cfg with fun_contains_calls = true } in
     Cfg_with_infos.make (Cfg_with_layout.with_cfg cfg_with_layout cfg)

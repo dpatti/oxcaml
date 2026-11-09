@@ -46,6 +46,9 @@ module L = Asm_targets.Asm_label
 (* Name of current function *)
 let function_name = ref ""
 
+(* Debuginfo of current function *)
+let function_dbg = ref Debuginfo.none
+
 (* These callbacks are just instrumentation for expect_asm tests. *)
 let expect_asm_callbacks = ref []
 
@@ -225,6 +228,16 @@ let emit_debug_info_linear i =
   match i.fdo with
   | None -> emit_debug_info i.dbg
   | Some { discriminator; dbg } -> emit_debug_info ~discriminator dbg
+
+(* The callback of a coverage probe records its return address, which coverage
+   tools map to a source line. A probe whose debuginfo has no source line is
+   given line 0 ("no source line"), so that it is not attributed to the line of
+   the code that precedes it. *)
+let emit_trace_pc_guard_debug_info dbg =
+  if Emitaux.has_source_line dbg
+  then emit_debug_info dbg
+  else
+    Emitaux.emit_no_source_line_gen ~file_dbg:!function_dbg file_emitter D.loc
 
 let fp = Config.with_frame_pointers
 
@@ -2257,6 +2270,10 @@ let emit_instr ~first ~last ~fallthrough i =
         0 ty_args
     in
     add_used_symbol func;
+    if
+      String.equal func Cfg_trace_pc_guard.callback
+      && not (Emitaux.has_source_line i.dbg)
+    then emit_trace_pc_guard_debug_info i.dbg;
     if stack_ofs > 0
     then (
       I.mov rsp r13;
@@ -2897,7 +2914,7 @@ let emit_function_type_and_size fun_sym =
    declared by [Proc.destroyed_at_basic]. *)
 let emit_trace_pc_guard_call tpg =
   D.define_label tpg.tpg_lbl;
-  emit_debug_info tpg.tpg_dbg;
+  emit_trace_pc_guard_debug_info tpg.tpg_dbg;
   let must_save (r : Reg.t) =
     Reg.is_reg r
     &&
@@ -2950,6 +2967,7 @@ let fundecl fundecl =
     | Some { fun_end_label; fundecl } -> Some fun_end_label, fundecl
   in
   function_name := fundecl.fun_name;
+  function_dbg := fundecl.fun_dbg;
   fastcode_flag := fundecl.fun_fast;
   tailrec_entry_point := fundecl.fun_tailrec_entry_point_label;
   contains_calls := fundecl.fun_contains_calls;
