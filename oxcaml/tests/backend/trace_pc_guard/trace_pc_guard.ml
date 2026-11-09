@@ -8,6 +8,9 @@ external num_hit : unit -> int = "caml_tpcg_num_hit" [@@noalloc]
 
 external init_calls : unit -> int = "caml_tpcg_init_calls" [@@noalloc]
 
+external misaligned_calls : unit -> int = "caml_tpcg_misaligned_calls"
+[@@noalloc]
+
 let[@inline never] classify x = if x > 3 then "big" else "small"
 
 let[@inline never] name = function
@@ -21,12 +24,18 @@ let[@inline never] rec sum acc n = if n <= 0 then acc else sum (acc + n) (n - 1)
 let[@inline never] safe_div x y = try x / y with Division_by_zero -> 0
 
 (* Many values live across probes, including floats, which the C callback is
-   free to clobber in registers. *)
+   free to clobber in registers (and the one in [stubs.c] does). *)
 let[@inline never] mix a b c d =
   let x = (a *. 2.) +. b in
   let y = if c > 0 then x *. d else x -. d in
   let z = if Float.abs y > 10. then y /. 3. else y +. 1. in
   x +. y +. z +. a +. b +. d +. Float.of_int c
+
+let[@inline never] mix_int a b c d e f g h =
+  let x = if a > b then (a * c) + d else (b * d) - c in
+  let y = if e land 1 = 0 then x + f else x - g in
+  let z = match h with 0 -> y | 1 -> y * 2 | _ -> y + h in
+  a + b + c + d + e + f + g + h + x + y + z
 
 (* Number of distinct guards hit while running [f] with the gate open. *)
 let hits f =
@@ -67,7 +76,16 @@ let () =
   let (_ : int) =
     hits (fun () -> actual := mix 1.5 2.5 3 4.5 +. mix 1.5 2.5 (-3) 40.5)
   in
-  Printf.printf "values preserved across probes: %b\n"
-    (Float.equal expected !actual);
+  let expected_int = mix_int 1 2 3 4 5 6 7 8 + mix_int 9 8 7 6 5 4 3 1 in
+  let actual_int = ref 0 in
+  let (_ : int) =
+    hits (fun () ->
+        actual_int := mix_int 1 2 3 4 5 6 7 8 + mix_int 9 8 7 6 5 4 3 1)
+  in
+  Printf.printf "values preserved across probes: %b %b\n"
+    (Float.equal expected !actual)
+    (expected_int = !actual_int);
+  Printf.printf "callback called with an aligned stack: %b\n"
+    (misaligned_calls () = 0);
   Printf.printf "results: %s %s %d %d\n" (classify 5) (name (-2)) (sum 0 10)
     (safe_div 7 0)

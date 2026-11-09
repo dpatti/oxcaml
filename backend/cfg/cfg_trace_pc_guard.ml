@@ -30,8 +30,7 @@
 open! Int_replace_polymorphic_compare [@@ocaml.warning "-66"]
 module DLL = Doubly_linked_list
 
-let gate_symbol : Cmm.symbol =
-  { sym_name = "__sancov_should_track"; sym_global = Global }
+let gate = "__sancov_should_track"
 
 let callback = "__sanitizer_cov_trace_pc_guard"
 
@@ -244,27 +243,6 @@ let is_unreachable (block : Cfg.basic_block) =
   | Call _ | Prim _ ->
     false
 
-(* The number of instructions at the start of [block] that must precede its
-   probe, or [None] if the block cannot be instrumented.
-
-   The probe is a C call, which clobbers physical registers, so it can only be
-   placed where no physical register is live. Blocks typically start by moving
-   values out of physical registers: function parameters at the start of the
-   function, results at the return point of a call, and the exception bucket at
-   the start of a trap handler. *)
-let insertion_point cfg_with_infos (block : Cfg.basic_block) =
-  let no_physical_register_live (id : InstructionId.t) =
-    let live = Cfg_with_infos.liveness_find cfg_with_infos id in
-    not (Reg.Set.exists Reg.is_preassigned live.before)
-  in
-  let rec find n = function
-    | [] ->
-      if no_physical_register_live block.terminator.id then Some n else None
-    | (instr : Cfg.basic Cfg.instruction) :: rest ->
-      if no_physical_register_live instr.id then Some n else find (n + 1) rest
-  in
-  find 0 (DLL.to_list block.body)
-
 (* The debuginfo of the probe of [block]. The callback records its return
    address, which coverage tools map to a source line, so this determines the
    line that the probe covers. The first instructions of a block (moves,
@@ -300,143 +278,18 @@ let probe_dbg (cfg : Cfg.t) (block : Cfg.basic_block) ~is_entry =
     in
     match branch_dbgs with [dbg] -> dbg | [] | _ :: _ :: _ -> Debuginfo.none)
 
-let split_list l n =
-  let rec loop n rev_prefix l =
-    match l with
-    | x :: rest when n > 0 -> loop (n - 1) (x :: rev_prefix) rest
-    | _ -> List.rev rev_prefix, l
-  in
-  loop n [] l
-
-(* Split [block] after its first [prefix_length] instructions into:
-
-   {v block: prefix gate := load __sancov_should_track if gate goto call_block
-   else goto rest_block rest_block: (rest of block, original terminator)
-   call_block: __sanitizer_cov_trace_pc_guard(&guard); goto rest_block v}
-
-   [block] keeps its label, so that branches to it, including self tail calls,
-   are unaffected. [rest_block] directly follows [block] in the layout so that
-   the common case falls through, and [call_block] is placed at the end. *)
-let instrument_block cfg_with_layout (block : Cfg.basic_block) ~prefix_length
-    ~dbg =
-  let cfg = Cfg_with_layout.cfg cfg_with_layout in
-  let prefix, suffix = split_list (DLL.to_list block.body) prefix_length in
-  let stack_offset =
-    match suffix with
-    | (instr : Cfg.basic Cfg.instruction) :: _ -> instr.stack_offset
-    | [] -> block.terminator.stack_offset
-  in
-  let make desc ~arg ~res =
-    Cfg.make_instruction ~desc ~arg ~res ~dbg ~stack_offset
-      ~id:(InstructionId.get_and_incr cfg.next_instruction_id)
-      ()
-  in
-  let basic (desc : Cfg.basic) ~arg ~res = make desc ~arg ~res in
-  let terminator (desc : Cfg.terminator) ~arg ~res = make desc ~arg ~res in
-  let call_label = Cmm.new_label () in
-  let rest_label = Cmm.new_label () in
-  (* The successors of [block] become the successors of [rest_block]. This must
-     be computed before the terminator of [block] is replaced. *)
-  Label.Set.iter
-    (fun successor ->
-      let successor_block = Cfg.get_block_exn cfg successor in
-      successor_block.predecessors
-        <- successor_block.predecessors
-           |> Label.Set.remove block.start
-           |> Label.Set.add rest_label)
-    (Cfg.successor_labels ~normal:true ~exn:true block);
-  let rest_block : Cfg.basic_block =
-    { start = rest_label;
-      body = DLL.of_list suffix;
-      terminator = block.terminator;
-      predecessors = Label.Set.of_list [block.start; call_label];
-      stack_offset;
-      exn = block.exn;
-      can_raise = block.can_raise;
-      is_trap_handler = false;
-      cold = block.cold
-    }
-  in
-  let gate_address = Reg.create Cmm.Int in
-  let gate = Reg.create Cmm.Int in
-  DLL.clear block.body;
-  DLL.add_list block.body prefix;
-  DLL.add_end block.body
-    (basic (Op (Const_symbol gate_symbol)) ~arg:[||] ~res:[| gate_address |]);
-  DLL.add_end block.body
-    (basic
-       (Op
-          (Load
-             { memory_chunk = Word_int;
-               addressing_mode = Arch.identity_addressing;
-               mutability = Mutable;
-               is_atomic = false
-             }))
-       ~arg:[| gate_address |] ~res:[| gate |]);
-  block.terminator
-    <- terminator
-         (Truth_test { ifso = call_label; ifnot = rest_label })
-         ~arg:[| gate |] ~res:[||];
-  block.exn <- None;
-  block.can_raise <- false;
-  let guard = Reg.create Cmm.Int in
-  let loc_args, stack_ofs, stack_align =
-    Proc.loc_external_arguments [Cmm.XInt]
-  in
-  let loc_arg = loc_args.(0) in
-  let call_block : Cfg.basic_block =
-    { start = call_label;
-      body =
-        DLL.of_list
-          [ basic
-              (Op (Const_symbol (guard_symbol (new_guard ()))))
-              ~arg:[||] ~res:[| guard |];
-            basic (Op Move) ~arg:[| guard |] ~res:loc_arg ];
-      terminator =
-        terminator
-          (Prim
-             { op =
-                 External
-                   { func_symbol = callback;
-                     alloc = false;
-                     effects = Arbitrary_effects;
-                     ty_res = Cmm.typ_void;
-                     ty_args = [Cmm.XInt];
-                     stack_ofs;
-                     stack_align
-                   };
-               label_after = rest_label
-             })
-          ~arg:loc_arg ~res:[||];
-      predecessors = Label.Set.singleton block.start;
-      stack_offset;
-      exn = None;
-      can_raise = false;
-      is_trap_handler = false;
-      cold = false
-    }
-  in
-  Cfg_with_layout.add_block cfg_with_layout rest_block ~after:block.start;
-  match DLL.last (Cfg_with_layout.layout cfg_with_layout) with
-  | None -> Misc.fatal_error "Cfg_trace_pc_guard: empty layout"
-  | Some last ->
-    Cfg_with_layout.add_block cfg_with_layout call_block ~after:last
-
-(* With [-trace-pc-guard-preserving], a probe is a single target-specific
-   operation at the start of the block, whose out-of-line slow path preserves
-   all registers but one scratch register (see [Arch.trace_pc_guard_operation]
-   and the emitter). The register allocator only has to avoid that scratch
-   register, and no block needs to be split. *)
-let instrument_block_preserving (cfg : Cfg.t) (block : Cfg.basic_block) ~dbg =
+(* A probe is a single target-specific operation at the start of the block,
+   whose out-of-line slow path preserves all registers but one scratch register
+   (see [Arch.trace_pc_guard_operation] and the emitter). The register allocator
+   only has to avoid that scratch register. *)
+let instrument_block (cfg : Cfg.t) (block : Cfg.basic_block) ~dbg =
   let stack_offset =
     match DLL.hd block.body with
     | Some (instr : Cfg.basic Cfg.instruction) -> instr.stack_offset
     | None -> block.terminator.stack_offset
   in
   match Arch.trace_pc_guard_operation (new_guard ()) with
-  | None ->
-    Misc.fatal_error
-      "-trace-pc-guard-preserving is not supported on this target"
+  | None -> Misc.fatal_error "-trace-pc-guard is not supported on this target"
   | Some op ->
     DLL.add_begin block.body
       (Cfg.make_instruction
@@ -448,65 +301,22 @@ let instrument_block_preserving (cfg : Cfg.t) (block : Cfg.basic_block) ~dbg =
 let run cfg_with_infos =
   let cfg_with_layout = Cfg_with_infos.cfg_with_layout cfg_with_infos in
   let cfg = Cfg_with_layout.cfg cfg_with_layout in
-  let preserving = !Clflags.trace_pc_guard_preserving in
-  let insertion_point cfg_with_infos block =
-    if preserving then Some 0 else insertion_point cfg_with_infos block
-  in
   if split_critical_edges cfg_with_layout
-  then (
-    Cfg_with_infos.invalidate_liveness cfg_with_infos;
-    Cfg_with_infos.invalidate_dominators_and_loop_infos cfg_with_infos);
-  (* All insertion points and probe debuginfo are computed before the graph is
-     modified, since they depend on liveness and on the original terminators.
-     Blocks are visited in layout order so that guards are numbered
-     deterministically. *)
+  then Cfg_with_infos.invalidate_dominators_and_loop_infos cfg_with_infos;
   let dominators = Cfg_with_infos.dominators cfg_with_infos in
   let post_dominators = Post_dominators.build cfg in
-  (* The entry block usually cannot be instrumented, since the parameters are
-     live in physical registers until they are moved to temporaries in its
-     successor (which is also the target of self tail calls). *)
-  let entry = Cfg.get_block_exn cfg cfg.entry_label in
-  let entry_label =
-    match insertion_point cfg_with_infos entry, entry.terminator.desc with
-    | None, Always successor -> successor
-    | Some _, _
-    | ( None,
-        ( Never | Parity_test _ | Truth_test _ | Float_test _ | Int_test _
-        | Switch _ | Return | Raise _ | Tailcall_self _ | Tailcall_func _
-        | Call_no_return _ | Invalid _ | Call _ | Prim _ ) ) ->
-      cfg.entry_label
-  in
-  let to_instrument =
-    DLL.fold_right (Cfg_with_layout.layout cfg_with_layout) ~init:[]
-      ~f:(fun label acc ->
-        let block = Cfg.get_block_exn cfg label in
-        let is_entry = Label.equal label entry_label in
-        if
-          is_unreachable block
-          || not
-               (should_instrument ~dominators ~post_dominators ~is_entry block)
-        then acc
-        else
-          match insertion_point cfg_with_infos block with
-          | None -> acc
-          | Some prefix_length ->
-            (block, prefix_length, probe_dbg cfg block ~is_entry) :: acc)
-  in
-  match to_instrument with
-  | [] -> cfg_with_infos
-  | _ :: _ when preserving ->
-    List.iter
-      (fun (block, _, dbg) -> instrument_block_preserving cfg block ~dbg)
-      to_instrument;
-    Cfg_with_infos.invalidate_liveness cfg_with_infos;
-    cfg_with_infos
-  | _ :: _ ->
-    List.iter
-      (fun (block, prefix_length, dbg) ->
-        instrument_block cfg_with_layout block ~prefix_length ~dbg)
-      to_instrument;
-    let cfg = { cfg with fun_contains_calls = true } in
-    Cfg_with_infos.make (Cfg_with_layout.with_cfg cfg_with_layout cfg)
+  (* Blocks are visited in layout order so that guards are numbered
+     deterministically. Adding probes does not change the graph, so the
+     dominator trees remain valid. *)
+  DLL.iter (Cfg_with_layout.layout cfg_with_layout) ~f:(fun label ->
+      let block = Cfg.get_block_exn cfg label in
+      let is_entry = Label.equal label cfg.entry_label in
+      if
+        (not (is_unreachable block))
+        && should_instrument ~dominators ~post_dominators ~is_entry block
+      then instrument_block cfg block ~dbg:(probe_dbg cfg block ~is_entry));
+  Cfg_with_infos.invalidate_liveness cfg_with_infos;
+  cfg_with_infos
 
 let emit_guards () =
   let count = !guard_count in

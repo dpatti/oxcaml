@@ -2270,10 +2270,6 @@ let emit_instr ~first ~last ~fallthrough i =
         0 ty_args
     in
     add_used_symbol func;
-    if
-      String.equal func Cfg_trace_pc_guard.callback
-      && not (Emitaux.has_source_line i.dbg)
-    then emit_trace_pc_guard_debug_info i.dbg;
     if stack_ofs > 0
     then (
       I.mov rsp r13;
@@ -2674,7 +2670,7 @@ let emit_instr ~first ~last ~fallthrough i =
     (* combine high and low into rax *)
   | Lop (Specific (Itrace_pc_guard guard)) ->
     (* if (__sancov_should_track) goto slow path *)
-    let gate = Cmm.global_symbol "__sancov_should_track" in
+    let gate = Cmm.global_symbol Cfg_trace_pc_guard.gate in
     add_used_symbol gate.sym_name;
     load_symbol_addr gate r11;
     I.cmp (int 0) (mem64 QWORD 0 (Scalar R11));
@@ -2955,7 +2951,7 @@ let emit_trace_pc_guard_call tpg =
   I.mov r11 (mem64 QWORD 0 (Scalar RSP));
   List.iter (fun (r, offset) -> move r (slot r offset)) saved;
   load_symbol_addr (Cfg_trace_pc_guard.guard_symbol tpg.tpg_guard) rdi;
-  emit_call (Cmm.global_symbol "__sanitizer_cov_trace_pc_guard");
+  emit_call (Cmm.global_symbol Cfg_trace_pc_guard.callback);
   List.iter (fun (r, offset) -> move (slot r offset) r) saved;
   I.mov (mem64 QWORD 0 (Scalar RSP)) rsp;
   I.jmp (emit_asm_label_arg tpg.tpg_return_lbl)

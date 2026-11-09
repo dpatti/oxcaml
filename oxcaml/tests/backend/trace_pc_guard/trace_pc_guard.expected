@@ -5,5 +5,6 @@ if: both arms cover more than one: true
 match: all cases cover more than one: true
 loop: iterating covers more than not: true
 try: the handler adds coverage: true
-values preserved across probes: true
+values preserved across probes: true true
+callback called with an aligned stack: true
 results: big negative 55 0

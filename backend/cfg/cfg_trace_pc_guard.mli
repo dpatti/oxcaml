@@ -37,10 +37,17 @@
     [__start_ocaml_trace_pc_guards] and [__stop_ocaml_trace_pc_guards], which
     the runtime uses to call [__sanitizer_cov_trace_pc_guard_init].
 
+    A probe is the target-specific operation [Arch.trace_pc_guard_operation].
+    The emitter places the call out of line, and it preserves every register
+    except one scratch register.
+
     See https://clang.llvm.org/docs/SanitizerCoverage.html *)
 
 (** Instrument a function. Must run before register allocation. *)
 val run : Cfg_with_infos.t -> Cfg_with_infos.t
+
+(** The name of the gate, [__sancov_should_track]. *)
+val gate : string
 
 (** The name of the callback, [__sanitizer_cov_trace_pc_guard]. *)
 val callback : string

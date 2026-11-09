@@ -21,6 +21,8 @@ void __sanitizer_cov_trace_pc_guard_init(uint32_t *start, uint32_t *stop)
   for (uint32_t *g = start; g < stop; g++) *g = 0;
 }
 
+static int misaligned_calls = 0;
+
 void __sanitizer_cov_trace_pc_guard(uint32_t *guard)
 {
   if (guard < guards_start || guard >= guards_stop) {
@@ -29,6 +31,31 @@ void __sanitizer_cov_trace_pc_guard(uint32_t *guard)
     abort();
   }
   *guard = 1;
+#if defined(__x86_64__)
+  /* The frame pointer of this function is 16-byte aligned iff the caller
+     aligned the stack as the C calling convention requires. */
+  if ((uintptr_t)__builtin_frame_address(0) % 16 != 0) misaligned_calls++;
+  /* Overwrite every register that the C calling convention lets a callee
+     clobber, so that the test fails if the probe does not save one that is
+     live. */
+  __asm__ volatile(
+    "mov $-1, %%rax\n\tmov $-1, %%rcx\n\tmov $-1, %%rdx\n\t"
+    "mov $-1, %%rsi\n\tmov $-1, %%rdi\n\tmov $-1, %%r8\n\t"
+    "mov $-1, %%r9\n\tmov $-1, %%r10\n\tmov $-1, %%r11\n\t"
+    "pcmpeqd %%xmm0, %%xmm0\n\tpcmpeqd %%xmm1, %%xmm1\n\t"
+    "pcmpeqd %%xmm2, %%xmm2\n\tpcmpeqd %%xmm3, %%xmm3\n\t"
+    "pcmpeqd %%xmm4, %%xmm4\n\tpcmpeqd %%xmm5, %%xmm5\n\t"
+    "pcmpeqd %%xmm6, %%xmm6\n\tpcmpeqd %%xmm7, %%xmm7\n\t"
+    "pcmpeqd %%xmm8, %%xmm8\n\tpcmpeqd %%xmm9, %%xmm9\n\t"
+    "pcmpeqd %%xmm10, %%xmm10\n\tpcmpeqd %%xmm11, %%xmm11\n\t"
+    "pcmpeqd %%xmm12, %%xmm12\n\tpcmpeqd %%xmm13, %%xmm13\n\t"
+    "pcmpeqd %%xmm14, %%xmm14\n\tpcmpeqd %%xmm15, %%xmm15"
+    :
+    :
+    : "rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "xmm0",
+      "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9",
+      "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15", "cc");
+#endif
 }
 
 extern uint32_t __start_ocaml_trace_pc_guards[] __attribute__((weak));
@@ -72,4 +99,10 @@ value caml_tpcg_init_calls(value unit)
 {
   (void)unit;
   return Val_int(init_calls);
+}
+
+value caml_tpcg_misaligned_calls(value unit)
+{
+  (void)unit;
+  return Val_int(misaligned_calls);
 }
